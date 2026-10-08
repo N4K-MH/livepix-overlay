@@ -1,0 +1,12 @@
+{
+  "name": "livepix-overlay",
+  "version": "1.0.0",
+  "description": "Ponte entre LivePix e overlay do N4K",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
