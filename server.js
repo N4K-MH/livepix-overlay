@@ -46,18 +46,19 @@ async function getAccessToken() {
   );
 
   if (!response.ok) {
+
     const error = await response.text();
 
     throw new Error(
       `Erro ao obter token: ${response.status} ${error}`
     );
+
   }
 
   const data = await response.json();
 
   accessToken = data.access_token;
 
-  // Renova 1 minuto antes de expirar
   tokenExpiresAt =
     Date.now() + ((data.expires_in - 60) * 1000);
 
@@ -66,46 +67,33 @@ async function getAccessToken() {
 
 
 // ========================================
-// CRIAR WEBHOOK
+// CONSULTAR WEBHOOKS EXISTENTES
 // ========================================
 
-async function createWebhook() {
+async function getWebhooks() {
 
-  try {
+  const token = await getAccessToken();
 
-    const token = await getAccessToken();
-
-    const response = await fetch(
-      "https://api.livepix.gg/v2/webhooks",
-      {
-        method: "POST",
-
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-
-        body: JSON.stringify({
-          url: `https://livepix-overlay.onrender.com/webhook/livepix`
-        })
+  const response = await fetch(
+    "https://api.livepix.gg/v2/webhooks",
+    {
+      headers: {
+        "Authorization": `Bearer ${token}`
       }
-    );
+    }
+  );
 
-    const data = await response.text();
+  if (!response.ok) {
 
-    console.log("=== CRIAÇÃO DO WEBHOOK ===");
-    console.log(response.status);
-    console.log(data);
+    const error = await response.text();
 
-  } catch (error) {
-
-    console.error(
-      "Erro ao criar webhook:",
-      error.message
+    throw new Error(
+      `Erro ao consultar webhooks: ${response.status} ${error}`
     );
 
   }
 
+  return await response.json();
 }
 
 
@@ -141,6 +129,37 @@ async function getPayment(paymentId) {
 
 
 // ========================================
+// BUSCAR MENSAGEM
+// ========================================
+
+async function getMessage(messageId) {
+
+  const token = await getAccessToken();
+
+  const response = await fetch(
+    `https://api.livepix.gg/v2/messages/${messageId}`,
+    {
+      headers: {
+        "Authorization": `Bearer ${token}`
+      }
+    }
+  );
+
+  if (!response.ok) {
+
+    const error = await response.text();
+
+    throw new Error(
+      `Erro ao consultar mensagem: ${response.status} ${error}`
+    );
+
+  }
+
+  return await response.json();
+}
+
+
+// ========================================
 // PÁGINA INICIAL
 // ========================================
 
@@ -150,6 +169,34 @@ app.get("/", (req, res) => {
     status: "online",
     latestLivePix
   });
+
+});
+
+
+// ========================================
+// LISTAR WEBHOOKS
+// ========================================
+
+app.get("/api/webhooks", async (req, res) => {
+
+  try {
+
+    const webhooks = await getWebhooks();
+
+    res.json(webhooks);
+
+  } catch (error) {
+
+    console.error(
+      "Erro ao consultar webhooks:",
+      error.message
+    );
+
+    res.status(500).json({
+      error: error.message
+    });
+
+  }
 
 });
 
@@ -179,69 +226,98 @@ app.post("/webhook/livepix", async (req, res) => {
       !data.resource.id
     ) {
 
-      console.log(
-        "Evento ignorado."
-      );
+      console.log("Evento ignorado.");
 
       return;
     }
 
-    const paymentId = data.resource.id;
+    const resourceId = data.resource.id;
 
     console.log(
-      "Pagamento recebido:",
-      paymentId
-    );
-
-    const payment = await getPayment(
-      paymentId
+      "Recurso recebido:",
+      resourceId
     );
 
     console.log(
-      "=== PAGAMENTO COMPLETO ==="
+      "Tipo:",
+      data.resource.type
     );
 
+
+    // ========================================
+    // PAGAMENTO
+    // ========================================
+
+    if (data.resource.type === "payment") {
+
+      const payment = await getPayment(resourceId);
+
+      console.log("=== PAGAMENTO ===");
+
+      console.log(
+        JSON.stringify(payment, null, 2)
+      );
+
+      const paymentData =
+        payment.data || payment;
+
+      latestLivePix = {
+
+        name: "LivePix",
+
+        amount:
+          paymentData.amount ?? null,
+
+        currency:
+          paymentData.currency ?? null,
+
+        updatedAt:
+          new Date().toISOString()
+
+      };
+
+    }
+
+
+    // ========================================
+    // MENSAGEM
+    // ========================================
+
+    if (data.resource.type === "message") {
+
+      const message = await getMessage(resourceId);
+
+      console.log("=== MENSAGEM ===");
+
+      console.log(
+        JSON.stringify(message, null, 2)
+      );
+
+      const messageData =
+        message.data || message;
+
+      latestLivePix = {
+
+        name:
+          messageData.username ||
+          "LivePix",
+
+        amount:
+          messageData.amount ?? null,
+
+        currency:
+          messageData.currency ?? null,
+
+        updatedAt:
+          new Date().toISOString()
+
+      };
+
+    }
+
+
     console.log(
-      JSON.stringify(payment, null, 2)
-    );
-
-    const paymentData =
-      payment.data || payment;
-
-    /*
-      O endpoint de pagamentos fornece:
-      id
-      proof
-      reference
-      amount
-      currency
-      createdAt
-
-      O nome/mensagem do doador pode estar
-      disponível através dos dados relacionados
-      ao pagamento.
-    */
-
-    latestLivePix = {
-
-      name:
-        paymentData.username ||
-        paymentData.name ||
-        "LivePix",
-
-      amount:
-        paymentData.amount ?? null,
-
-      currency:
-        paymentData.currency ?? null,
-
-      updatedAt:
-        new Date().toISOString()
-
-    };
-
-    console.log(
-      "=== ÚLTIMO LIVEPIX ATUALIZADO ==="
+      "=== ÚLTIMO LIVEPIX ==="
     );
 
     console.log(
@@ -282,13 +358,11 @@ app.get("/api/latest", (req, res) => {
 app.listen(
   PORT,
   "0.0.0.0",
-  async () => {
+  () => {
 
     console.log(
       `Servidor rodando na porta ${PORT}`
     );
-
-    await createWebhook();
 
   }
 );
